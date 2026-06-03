@@ -1,0 +1,373 @@
+#!/usr/bin/env ruby
+# escalation-mcp — MCP server for Engineering escalation readiness checking
+#
+# Implements the Model Context Protocol (MCP) over stdio (JSON-RPC 2.0).
+# Copilot spawns this process at session start and calls it via stdin/stdout.
+#
+# Prerequisite: Salesforce CLI (`sf`) installed and authenticated against the
+# 'progress' org. If not installed, the tool returns an actionable error with
+# installation instructions.
+#
+# To enable, add to ~/.copilot/mcp-config.json:
+#
+#   "escalation-mcp": {
+#     "command": "/path/to/escalation-mcp/bin/escalation-mcp"
+#   }
+
+$LOAD_PATH.unshift File.expand_path('../lib', __dir__)
+
+require 'json'
+require_relative '../lib/salesforce_client'
+require_relative '../lib/checklist_evaluator'
+require_relative '../lib/jira_client'
+
+# ── Tool manifest ─────────────────────────────────────────────────────────────
+
+TOOLS = [
+  {
+    name: 'run_escalation_check',
+    description: <<~DESC.strip,
+      Pull a Salesforce case and evaluate it against the 6-item Engineering
+      escalation checklist. Returns a structured readiness report with
+      green/amber/red verdicts, evidence found, and gap descriptions for
+      each item. Also searches Jira for potential duplicate tickets and
+      pre-populates the Salesforce escalation form fields.
+
+      The Copilot agent uses this output to interview the engineer, fill any
+      gaps, and generate a complete copy-paste-ready SF escalation form package.
+
+      Requires the Salesforce CLI (`sf`) to be installed and authenticated.
+      Set SF_ORG_ALIAS env var to specify the org alias (auto-detects from
+      `sf config get target-org` if not set). Jira search runs automatically
+      if JIRA_EMAIL and JIRA_API_TOKEN are present in the environment.
+    DESC
+    inputSchema: {
+      type: 'object',
+      properties: {
+        case_number: {
+          type: 'string',
+          description: 'Salesforce case number (e.g. "01896145")'
+        }
+      },
+      required: ['case_number']
+    }
+  }
+].freeze
+
+# ── MCP response helpers ──────────────────────────────────────────────────────
+
+def send_response(id, result)
+  $stdout.print("#{JSON.generate({ jsonrpc: '2.0', id: id, result: result })}\n")
+  $stdout.flush
+end
+
+def send_error(id, code, message)
+  $stdout.print("#{JSON.generate({ jsonrpc: '2.0', id: id, error: { code: code, message: message } })}\n")
+  $stdout.flush
+end
+
+# ── Tool execution ────────────────────────────────────────────────────────────
+
+def run_escalation_check(case_number:)
+  case_data  = SalesforceClient.fetch_case(case_number)
+  evaluation = ChecklistEvaluator.evaluate(case_data)
+
+  subject = evaluation.dig(:case_summary, :subject)
+  product = evaluation.dig(:pre_populate, :product)
+  jira    = JiraClient.search_duplicates(subject, product)
+
+  bundle = begin
+    SalesforceClient.fetch_bundle(
+      case_id:     case_data[:case_id],
+      case_number: case_number
+    )
+  rescue StandardError => e
+    { error: e.message, attachment_count: 0 }
+  end
+
+  evaluation.merge(jira_results: jira, bundle: bundle)
+rescue SalesforceClient::SfCliNotFound => e
+  { error: 'sf_cli_not_found', message: e.message }
+rescue SalesforceClient::CaseNotFound => e
+  { error: 'case_not_found', message: e.message }
+rescue StandardError => e
+  { error: 'unexpected', message: "#{e.class}: #{e.message}" }
+end
+
+def format_result(report)
+  # Error cases — actionable messages back to the agent
+  if report[:error] || report['error']
+    error_type = report[:error] || report['error']
+    message    = report[:message] || report['message']
+
+    text = case error_type.to_s
+           when 'sf_cli_not_found'
+             "## ⚠️ Salesforce CLI not installed\n\n#{message}"
+           when 'case_not_found'
+             "## ❌ Case not found\n\n#{message}"
+           else
+             "## ❌ Error\n\n#{message}"
+           end
+
+    return [{ type: 'text', text: text }]
+  end
+
+  summary    = report[:case_summary]
+  checklist  = report[:checklist]  || []
+  additional = report[:additional] || []
+  pre_pop    = report[:pre_populate] || {}
+  jira       = report[:jira_results] || {}
+
+  status_icon = { 'green' => '🟢', 'amber' => '🟡', 'red' => '🔴' }
+
+  lines = []
+
+  # ── Header ──────────────────────────────────────────────────────────────────
+  lines << "## Escalation Readiness — Case #{summary[:case_number]}"
+  lines << ""
+
+  arr_str     = summary[:account_arr]     ? " | ARR: $#{summary[:account_arr].to_i.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\1,').reverse}" : ''
+  renewal_str = summary[:account_renewal] ? " | Renewal: #{summary[:account_renewal][0, 10]}" : ''
+
+  lines << "**#{summary[:account]}**#{arr_str}#{renewal_str}"
+  lines << "**#{summary[:subject]}**"
+  lines << "Severity: #{summary[:severity]} | Status: #{summary[:status]} | Support tier: #{summary[:support_level]}"
+  lines << "Last modified: #{summary[:last_modified]&.slice(0, 10)} by #{summary[:last_modified_by]}"
+  lines << "Comments: #{report[:comment_count]}"
+  lines << ""
+  lines << "---"
+  lines << ""
+
+  # ── Case comment history ─────────────────────────────────────────────────────
+  comments = report[:comments] || []
+  lines << "### 💬 Case Comments (#{comments.length})"
+  lines << ""
+
+  if comments.empty?
+    lines << "_No comments on this case._"
+  else
+    comments.each_with_index do |c, i|
+      pub    = c['IsPublished'] ? 'PUBLIC' : 'INTERNAL'
+      date   = c['CreatedDate']&.slice(0, 10)
+      author = c.dig('CreatedBy', 'Name') || 'Unknown'
+      body   = c['CommentBody'].to_s.strip
+      lines << "**Comment #{i + 1} [#{pub}] #{date} — #{author}**"
+      lines << body
+      lines << ""
+    end
+  end
+
+  lines << "---"
+  lines << ""
+
+  # ── 6-item checklist ────────────────────────────────────────────────────────
+  lines << "### 6-Item Engineering Checklist"
+  lines << ""
+
+  checklist.each_with_index do |item, i|
+    icon = status_icon[item[:status]] || '⚪'
+    lines << "#{icon} **#{i + 1}. #{item[:item]}**"
+    lines << "   Evidence: #{item[:evidence] || 'none found'}"
+    lines << "   Gap: #{item[:gap]}" if item[:gap]
+    lines << ""
+  end
+
+  green_count = checklist.count { |i| i[:status] == 'green' }
+  amber_count = checklist.count { |i| i[:status] == 'amber' }
+  red_count   = checklist.count { |i| i[:status] == 'red'   }
+
+  lines << "**Result: #{green_count}/6 green | #{amber_count} amber | #{red_count} red**"
+  lines << ""
+  lines << "---"
+  lines << ""
+
+  # ── Additional checks ───────────────────────────────────────────────────────
+  lines << "### Additional Checks"
+  lines << ""
+
+  additional.each do |item|
+    icon = status_icon[item[:status]] || '⚪'
+    lines << "#{icon} **#{item[:item]}**"
+    lines << "   #{item[:evidence]}"
+    lines << "   ⚠️ #{item[:gap]}" if item[:gap]
+    lines << ""
+  end
+
+  lines << "---"
+  lines << ""
+
+  # ── Support bundle ───────────────────────────────────────────────────────────
+  bundle = report[:bundle] || {}
+  lines << "### 📎 Support Bundle"
+  lines << ""
+
+  if bundle[:path]
+    size_mb = bundle[:size] ? (bundle[:size].to_f / (1024 * 1024)).round(1) : '?'
+    by_label = bundle[:matched_by] == :name ? 'name match' : 'extension match'
+    lines << "✅ **Downloaded:** #{bundle[:filename]} (#{size_mb} MB, #{by_label})"
+    lines << "**Path:** `#{bundle[:path]}`"
+    lines << "**Attachments on case:** #{bundle[:attachment_count]}"
+    lines << ""
+    lines << "> **Agent: call `run_checkit_report(path: \"#{bundle[:path]}\")` now.**"
+    lines << "> Include findings under checklist items 2 (Full Logs) and 6 (AI Analysis)."
+  elsif bundle[:no_bundle]
+    count = bundle[:attachment_count] || 0
+    lines << "⚠️ No support bundle found (#{count} attachment(s) on case — none matched bundle patterns)"
+    if bundle[:skipped]&.any?
+      lines << "Attachments present: #{bundle[:skipped].join('; ')}"
+    end
+    lines << "Ask the engineer to gather and attach a support bundle before escalating."
+  elsif bundle[:error]
+    lines << "❌ Bundle download failed: #{bundle[:error]}"
+    lines << "Check attachments manually on the case in Salesforce."
+  else
+    lines << "ℹ️ No file attachments on this case."
+  end
+
+  lines << ""
+  lines << "---"
+  lines << ""
+
+  # ── Jira duplicate check ────────────────────────────────────────────────────
+  lines << "### 🔍 Jira Duplicate Check"
+  lines << ""
+
+  if !jira[:available]
+    lines << "⚠️ Jira credentials not detected — search manually before raising:"
+    lines << "```"
+    lines << 'project = CHEF AND text ~ "[key error phrase from logs]"'
+    lines << "```"
+  elsif jira[:error]
+    lines << "⚠️ Jira query failed (#{jira[:error]}) — search manually before raising"
+  elsif jira[:issues]&.any?
+    lines << "**#{jira[:issues].length} potential match(es) found — confirm none cover this issue before raising a new ticket:**"
+    lines << ""
+    jira[:issues].each do |i|
+      fix      = i[:fix_version] ? " | Fix: #{i[:fix_version]}"  : ''
+      assignee = i[:assignee]    ? " | #{i[:assignee]}"          : ''
+      lines << "- **#{i[:key]}** — #{i[:summary]}"
+      lines << "  Status: #{i[:status]}#{assignee}#{fix}"
+    end
+    lines << ""
+    lines << "JQL used: `#{jira[:jql]}`"
+  else
+    lines << "✅ No obvious duplicates found"
+    lines << "JQL used: `#{jira[:jql]}`"
+    lines << "Consider also searching by specific error message text before raising."
+  end
+
+  lines << ""
+  lines << "---"
+  lines << ""
+
+  # ── SF form pre-population ──────────────────────────────────────────────────
+  lines << "### 📋 Salesforce Escalation Form — Pre-populated Fields"
+  lines << "*Defect Actions → Create New Defect (or RFA) on the case in Salesforce*"
+  lines << ""
+  lines << "**Step 2 — Product Details**"
+  lines << ""
+
+  headline = pre_pop[:headline] || summary[:subject]
+  lines << "```"
+  lines << "── HEADLINE ─────────────────────────────────────────────────────"
+  lines << headline
+  lines << ""
+  lines << "── PRODUCT ──────────────────────────────────────────────────────"
+  lines << (pre_pop[:product] || "⚠️  Detect manually — check subject and logs")
+  lines << ""
+  lines << "── MODULE ───────────────────────────────────────────────────────"
+  lines << "⚠️  Select from dropdown in the SF form"
+  lines << ""
+  lines << "── FOUND IN RELEASE ─────────────────────────────────────────────"
+  lines << (pre_pop[:found_in_release] || "⚠️  Confirm version with engineer")
+  lines << "```"
+  lines << ""
+  lines << "**Step 3 — Description Details**"
+  lines << ""
+  lines << "```"
+  lines << "── DESCRIPTION ──────────────────────────────────────────────────"
+  lines << "[ Agent generates after interview — see Step 4 in agent instructions ]"
+  lines << ""
+  lines << "── PUBLIC DESCRIPTION ───────────────────────────────────────────"
+  lines << "[ Agent generates after interview ]"
+  lines << ""
+  lines << "── STEPS TO REPRODUCE ───────────────────────────────────────────"
+  lines << "[ Agent generates after interview ]"
+  lines << ""
+  lines << "── ENVIRONMENT DETAILS ──────────────────────────────────────────"
+  lines << (pre_pop[:environment_hint] || "[ Verify against SF form's auto-populated value ]")
+  lines << "```"
+  lines << ""
+  lines << "---"
+
+  [
+    { type: 'text', text: lines.join("\n") },
+    { type: 'text', text: "\n---\n**Raw data (for agent use):**\n```json\n#{JSON.pretty_generate(report)}\n```" }
+  ]
+end
+
+# ── Main loop ─────────────────────────────────────────────────────────────────
+
+$stdout.sync = true
+$stderr.sync = true
+
+loop do
+  line = $stdin.gets
+  break if line.nil?
+
+  line = line.strip
+  next if line.empty?
+
+  begin
+    request = JSON.parse(line)
+  rescue JSON::ParserError
+    next
+  end
+
+  id     = request['id']
+  method = request['method']
+
+  case method
+  when 'initialize'
+    send_response(id, {
+      protocolVersion: '2024-11-05',
+      serverInfo: {
+        name:    'escalation-mcp',
+        version: File.read(File.join(__dir__, '..', 'VERSION')).strip
+      },
+      capabilities: { tools: {} }
+    })
+
+  when 'notifications/initialized'
+    next
+
+  when 'tools/list'
+    send_response(id, { tools: TOOLS })
+
+  when 'tools/call'
+    tool_name = request.dig('params', 'name')
+    args      = request.dig('params', 'arguments') || {}
+
+    if tool_name != 'run_escalation_check'
+      send_error(id, -32_601, "Unknown tool: #{tool_name}")
+      next
+    end
+
+    case_number = args['case_number']&.strip
+
+    if case_number.nil? || case_number.empty?
+      send_error(id, -32_602, 'Missing required argument: case_number')
+      next
+    end
+
+    report  = run_escalation_check(case_number: case_number)
+    content = format_result(report)
+    send_response(id, { content: content })
+
+  when 'ping'
+    send_response(id, {})
+
+  else
+    send_error(id, -32_601, "Method not found: #{method}") if id
+  end
+end
