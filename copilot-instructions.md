@@ -68,7 +68,7 @@ The tool returns the raw case content — description, error message, and full c
 
 4. **Workarounds** — 🟢 if workarounds tried (and their outcomes) are documented, OR it is clearly stated why none were applicable. 🟡 if some troubleshooting is mentioned but outcomes aren't clear. 🔴 if nothing has been tried and no reason is given.
 
-5. **Steps to reproduce** — 🟢 if full numbered STR are present, OR a formal statement that reproduction is not feasible with a specific reason. 🟡 if there is a partial trigger or "it happens intermittently" without full steps. 🔴 if there is nothing.
+5. **Steps to reproduce** — 🟢 if full numbered steps to reproduce are present, OR a formal statement that reproduction is not feasible with a specific reason. 🟡 if there is a partial trigger or "it happens intermittently" without full steps. 🔴 if there is nothing.
 
 6. **AI-assisted analysis** — 🟢 if any AI tooling was used (checkit, Copilot, RAG KB search) and outcome noted. 🟡 if it is unclear. 🔴 if there is no mention at all.
 
