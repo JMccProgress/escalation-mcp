@@ -46,8 +46,8 @@ class JiraClient
 
     return { available: true, issues: [], jql: nil } if terms.empty?
 
-    text_clauses = terms.map { |t| "\"#{t}\"" }.join(' ')
-    jql = "project = CHEF AND text ~ (#{text_clauses}) ORDER BY created DESC"
+    text_clause = terms.join(' ')
+    jql = "project = CHEF AND text ~ \"#{text_clause}\" ORDER BY created DESC"
 
     uri = URI("#{JIRA_URL}/rest/api/3/search/jql")
     uri.query = URI.encode_www_form(
