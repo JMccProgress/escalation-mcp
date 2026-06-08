@@ -17,7 +17,6 @@
 $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
 
 require 'json'
-require_relative '../lib/salesforce_client'
 require_relative '../lib/checklist_evaluator'
 require_relative '../lib/jira_client'
 
@@ -27,29 +26,52 @@ TOOLS = [
   {
     name: 'run_escalation_check',
     description: <<~DESC.strip,
-      Pull a Salesforce case and evaluate it against the 6-item Engineering
-      escalation checklist. Returns a structured readiness report with
-      green/amber/red verdicts, evidence found, and gap descriptions for
-      each item. Also searches Jira for potential duplicate tickets and
-      pre-populates the Salesforce escalation form fields.
+      Evaluate a Salesforce case against the 6-item Engineering escalation
+      checklist. Returns a structured readiness report with green/amber/red
+      verdicts, evidence found, and gap descriptions for each item. Also
+      searches Jira for potential duplicate tickets and pre-populates the
+      Salesforce escalation form fields.
 
-      The Copilot agent uses this output to interview the engineer, fill any
-      gaps, and generate a complete copy-paste-ready SF escalation form package.
+      The agent fetches the case and comments via the Salesforce MCP tools
+      and passes them in as JSON strings. No direct Salesforce connection
+      is required by this tool.
 
-      Requires the Salesforce CLI (`sf`) to be installed and authenticated.
-      Set SF_ORG_ALIAS env var to specify the org alias (auto-detects from
-      `sf config get target-org` if not set). Jira search runs automatically
-      if JIRA_EMAIL and JIRA_API_TOKEN are present in the environment.
+      Workflow:
+        1. Fetch case: SELECT Id, CaseNumber, Subject, Status, Severity__c,
+           Chef_Support_Level__c, AccountId, Account.Name, Contact.Name,
+           CreatedDate, LastModifiedDate, LastModifiedBy.Name
+           FROM Case WHERE CaseNumber = 'XXXXXXXX'
+        2. Fetch comments: SELECT Id, CommentBody, CreatedDate,
+           CreatedBy.Name, IsPublished FROM CaseComment
+           WHERE ParentId = '<case_id>' ORDER BY CreatedDate ASC
+        3. Optionally fetch account: SELECT Id, Name, AnnualRevenue
+           FROM Account WHERE Id = '<account_id>'
+        4. Pass all three as JSON strings to this tool.
+
+      Jira duplicate search runs automatically if JIRA_EMAIL and
+      JIRA_API_TOKEN are present in the environment.
     DESC
     inputSchema: {
       type: 'object',
       properties: {
         case_number: {
           type: 'string',
-          description: 'Salesforce case number (e.g. "01896145")'
+          description: 'Salesforce case number (e.g. "01896145") — used for display and Jira search'
+        },
+        case_json: {
+          type: 'string',
+          description: 'JSON string of the Salesforce Case record (from SOQL query)'
+        },
+        comments_json: {
+          type: 'string',
+          description: 'JSON string of the CaseComment records array (from SOQL query)'
+        },
+        account_json: {
+          type: 'string',
+          description: 'JSON string of the Account record (optional, for ARR/renewal info)'
         }
       },
-      required: ['case_number']
+      required: %w[case_number case_json comments_json]
     }
   }
 ].freeze
@@ -68,28 +90,30 @@ end
 
 # ── Tool execution ────────────────────────────────────────────────────────────
 
-def run_escalation_check(case_number:)
-  case_data  = SalesforceClient.fetch_case(case_number)
+def run_escalation_check(case_number:, case_json:, comments_json:, account_json: nil)
+  kase     = JSON.parse(case_json)
+  comments = JSON.parse(comments_json)
+  account  = account_json ? JSON.parse(account_json) : nil
+
+  # Normalise: comments may come wrapped in a records array from SOQL
+  comments = comments['records'] if comments.is_a?(Hash) && comments['records']
+  kase     = kase['records'].first if kase.is_a?(Hash) && kase['records']
+
+  case_data = {
+    case:        kase,
+    comments:    comments,
+    case_id:     kase['Id'],
+    case_number: case_number,
+    account:     account
+  }
+
   evaluation = ChecklistEvaluator.evaluate(case_data)
 
   subject = evaluation.dig(:case_summary, :subject)
   product = evaluation.dig(:pre_populate, :product)
   jira    = JiraClient.search_duplicates(subject, product)
 
-  bundle = begin
-    SalesforceClient.fetch_bundle(
-      case_id:     case_data[:case_id],
-      case_number: case_number
-    )
-  rescue StandardError => e
-    { error: e.message, attachment_count: 0 }
-  end
-
-  evaluation.merge(jira_results: jira, bundle: bundle)
-rescue SalesforceClient::SfCliNotFound => e
-  { error: 'sf_cli_not_found', message: e.message }
-rescue SalesforceClient::CaseNotFound => e
-  { error: 'case_not_found', message: e.message }
+  evaluation.merge(jira_results: jira, bundle: { no_bundle: true, attachment_count: 0 })
 rescue StandardError => e
   { error: 'unexpected', message: "#{e.class}: #{e.message}" }
 end
@@ -353,14 +377,30 @@ loop do
       next
     end
 
-    case_number = args['case_number']&.strip
+    case_number   = args['case_number']&.strip
+    case_json     = args['case_json']&.strip
+    comments_json = args['comments_json']&.strip
+    account_json  = args['account_json']&.strip
 
     if case_number.nil? || case_number.empty?
       send_error(id, -32_602, 'Missing required argument: case_number')
       next
     end
+    if case_json.nil? || case_json.empty?
+      send_error(id, -32_602, 'Missing required argument: case_json — fetch the case via Salesforce MCP and pass it here')
+      next
+    end
+    if comments_json.nil? || comments_json.empty?
+      send_error(id, -32_602, 'Missing required argument: comments_json — fetch CaseComments via Salesforce MCP and pass them here')
+      next
+    end
 
-    report  = run_escalation_check(case_number: case_number)
+    report  = run_escalation_check(
+      case_number:   case_number,
+      case_json:     case_json,
+      comments_json: comments_json,
+      account_json:  account_json
+    )
     content = format_result(report)
     send_response(id, { content: content })
 
