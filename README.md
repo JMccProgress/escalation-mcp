@@ -27,10 +27,10 @@ That's it. The agent pulls the case, runs the checklist, interviews you for any 
 ## Prerequisites
 
 - Ruby >= 3.0
-- [Salesforce CLI (`sf`)](https://developer.salesforce.com/tools/salesforcecli) installed and authenticated
-  - Install: `brew install sf`
-  - Authenticate: `sf org login web --alias <your-org-alias>`
-  - Set: `export SF_ORG_ALIAS=<your-org-alias>` (or let the tool auto-detect your default org)
+- Salesforce credentials via one of:
+  - `SALESFORCE_ACCESS_TOKEN` + `SALESFORCE_INSTANCE_URL` env vars
+  - `SF_MCP_TOKEN_FILE` pointing at an mcp-remote OAuth token JSON + `SALESFORCE_INSTANCE_URL`
+  - [Salesforce CLI (`sf`)](https://developer.salesforce.com/tools/salesforcecli) installed and authenticated (legacy)
 
 ## Setup
 
@@ -64,7 +64,10 @@ The agent will:
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `SF_ORG_ALIAS` | auto-detect | SF org alias to authenticate against |
+| `SALESFORCE_ACCESS_TOKEN` | — | SF access token (takes priority over all other methods) |
+| `SF_MCP_TOKEN_FILE` | — | Path to an mcp-remote OAuth token JSON file (fallback if no access token) |
+| `SALESFORCE_INSTANCE_URL` | — | SF instance URL (required alongside either token method above) |
+| `SF_ORG_ALIAS` | auto-detect | SF CLI org alias (legacy fallback, requires `sf` installed) |
 | `SF_RENEWAL_DATE_FIELD` | `Contract_Expiration_Date__c` | Account renewal date field name |
 | `JIRA_URL` | — | Jira instance URL (e.g. `https://yourorg.atlassian.net`) |
 | `JIRA_EMAIL` | — | Jira credentials for duplicate search |

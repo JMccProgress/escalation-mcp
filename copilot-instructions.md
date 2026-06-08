@@ -111,7 +111,7 @@ The tool pre-populates HEADLINE, PRODUCT, FOUND IN RELEASE, and ENVIRONMENT DETA
 
 **DESCRIPTION** (main body — rich text):
 ```
-SF Case: [CaseNumber] (https://progress.my.salesforce.com/lightning/r/Case/[CaseId]/view)
+SF Case: [CaseNumber] ([SF_INSTANCE_URL]/lightning/r/Case/[CaseId]/view)
 Customer: [Account] | Severity: [X] | Support tier: [tier] | ARR: [if available]
 
 Problem Statement

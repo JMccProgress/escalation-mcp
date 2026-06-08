@@ -5,7 +5,11 @@ require 'uri'
 require 'fileutils'
 require 'tmpdir'
 
-# Wraps Salesforce REST API calls, authenticating via the `sf` CLI.
+# Wraps Salesforce REST API calls.
+# Auth priority:
+#   1. SALESFORCE_ACCESS_TOKEN env var (set externally)
+#   2. Token file at SF_MCP_TOKEN_FILE env var (mcp-remote OAuth cache)
+#   3. sf CLI via SF_ORG_ALIAS (legacy — requires sf to be installed)
 class SalesforceClient
   API_VERSION = 'v66.0'
 
@@ -217,19 +221,35 @@ class SalesforceClient
   end
 
   def auth
+    instance_url = ENV.fetch('SALESFORCE_INSTANCE_URL', '')
+
+    # 1. Explicit env var
+    token = ENV['SALESFORCE_ACCESS_TOKEN'].to_s.strip
+    return [token, instance_url] unless token.empty?
+
+    # 2. mcp-remote token file (set SF_MCP_TOKEN_FILE to the path)
+    token_file = ENV['SF_MCP_TOKEN_FILE'].to_s.strip
+    if token_file.length > 0
+      token_file = File.expand_path(token_file)
+      if File.exist?(token_file)
+        data = JSON.parse(File.read(token_file))
+        token = data['access_token'].to_s.strip
+        return [token, instance_url] unless token.empty?
+      end
+    end
+
+    # 3. sf CLI fallback (legacy)
     unless sf_cli_available?
       raise SfCliNotFound, <<~MSG.strip
-        The Salesforce CLI (`sf`) was not found on PATH.
+        No Salesforce credentials found.
 
-        Install it with:
-          brew install sf
+        Set one of:
+          export SALESFORCE_ACCESS_TOKEN=<token>
+          export SF_MCP_TOKEN_FILE=<path-to-mcp-remote-token-json>
 
-        Or download from:
-          https://developer.salesforce.com/tools/salesforcecli
-
-        Once installed, authenticate with:
-          sf org login web --alias <your-org-alias>
-          export SF_ORG_ALIAS=<your-org-alias>
+        Or install the Salesforce CLI and authenticate:
+          brew install sf && sf org login web --alias <alias>
+          export SF_ORG_ALIAS=<alias>
       MSG
     end
 
