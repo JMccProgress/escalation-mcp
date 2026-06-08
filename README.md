@@ -9,10 +9,10 @@ A document describing the escalation checklist is easy to ignore, skip, or inter
 Because it's built on the [Model Context Protocol](https://modelcontextprotocol.io), it works with GitHub Copilot CLI, Claude Desktop, Cursor, or any AI assistant that supports MCP servers — no vendor lock-in, and any team member can use it with whatever AI tooling they already have.
 
 **What it does:**
-1. Pulls the full Salesforce case and all comments automatically
+1. Receives the Salesforce case and comments (fetched by the AI agent via SF MCP tools and passed in)
 2. Runs the 6-item escalation checklist heuristically against the evidence
 3. Searches Jira for duplicate tickets
-4. Downloads any attached support bundle for log analysis
+4. Flags any attached support bundle for log analysis
 5. Interviews the engineer for every amber/red item — and pushes back on weak answers
 6. Generates a complete, copy-paste-ready SF escalation form package only when all items pass
 
@@ -22,7 +22,7 @@ Because it's built on the [Model Context Protocol](https://modelcontextprotocol.
 escalation check 01234567
 ```
 
-That's it. The agent pulls the case, runs the checklist, interviews you for any gaps, and generates the SF escalation form. See [Setup](#setup) to get connected.
+The agent fetches the case and comments via your connected SF MCP tools, passes them to the escalation-mcp server, and runs the full checklist. See [Setup](#setup) to get connected.
 
 ## Prerequisites
 
@@ -54,9 +54,9 @@ That's it. The agent pulls the case, runs the checklist, interviews you for any 
 In Copilot CLI: `escalation check XXXXXXX` (where XXXXXXX is the SF case number)
 
 The agent will:
-1. Pull the full case + all comments from Salesforce
+1. Fetch the full case + all comments from Salesforce via your connected SF MCP tools and pass them to the server
 2. Run the 6-item checklist heuristically and search Jira for duplicates
-3. Download any attached support bundle and run log analysis if tooling is available
+3. Flag any attached support bundle for log analysis if tooling is available
 4. Interview you for any amber/red items — pushing back on weak or vague answers
 5. Generate a complete, copy-paste-ready SF escalation form package once all items pass
 
