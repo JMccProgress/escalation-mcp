@@ -1,4 +1,6 @@
 require 'time'
+require 'date'
+require 'base64'
 
 # Heuristically evaluates a Salesforce case against the 6-item Engineering
 # escalation checklist. Returns green/amber/red verdicts with evidence and

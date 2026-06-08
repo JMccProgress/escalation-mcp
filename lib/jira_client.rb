@@ -54,7 +54,10 @@ class JiraClient
     http.open_timeout = 10
     http.read_timeout = 15
 
-    parsed = JSON.parse(http.request(req).body)
+    res = http.request(req)
+    return { available: true, error: "Jira API returned #{res.code}" } unless res.is_a?(Net::HTTPSuccess)
+
+    parsed = JSON.parse(res.body)
 
     issues = (parsed['issues'] || []).map do |i|
       {

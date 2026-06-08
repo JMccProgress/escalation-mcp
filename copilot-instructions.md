@@ -12,7 +12,47 @@ This tool enforces a consistent, high-quality escalation standard across the who
 
 ## Trigger
 
-When an engineer says `escalation check XXXXXXX`, `escalate XXXXXXX`, or similar — call `run_escalation_check` first. Never assess without it.
+When an engineer says `escalation check XXXXXXX`, `escalate XXXXXXX`, or similar — **do not ask the engineer anything.** Run these steps automatically and silently before presenting any output:
+
+1. **Fetch the case** via `salesforce-soqlQuery`:
+   ```sql
+   SELECT Id, CaseNumber, Subject, Status, Severity__c, Chef_Support_Level__c,
+          AccountId, Account.Name, Contact.Name, CreatedDate, LastModifiedDate,
+          LastModifiedBy.Name, Error_Message__c, Question_Problem_Description__c
+   FROM Case WHERE CaseNumber = 'XXXXXXX'
+   ```
+
+2. **Fetch all comments** via `salesforce-soqlQuery`:
+   ```sql
+   SELECT Id, CommentBody, CreatedDate, CreatedBy.Name, IsPublished
+   FROM CaseComment WHERE ParentId = '<case_id_from_step_1>'
+   ORDER BY CreatedDate ASC
+   ```
+
+3. **Optionally fetch the account** (for ARR/renewal context) via `salesforce-soqlQuery`:
+   ```sql
+   SELECT Id, Name, AnnualRevenue FROM Account WHERE Id = '<account_id_from_step_1>'
+   ```
+
+4. **Call `run_escalation_check`** passing:
+   - `case_number`: the case number
+   - `case_json`: the full Case record as a JSON string
+   - `comments_json`: the CaseComment records array as a JSON string
+   - `account_json`: the Account record as a JSON string (optional)
+
+**Failure branches — handle these without asking the engineer:**
+- Case not found → "Case XXXXXXX was not found in Salesforce. Please check the number and try again."
+- No comments returned → pass an empty array `[]` for `comments_json` and note in the snapshot that no comments were found.
+- Salesforce query error → report the error clearly and stop. Do not call the tool with partial data.
+- AccountId missing on Case → skip step 3 and omit `account_json`.
+
+Only after the tool returns should you present anything to the engineer. Never ask the engineer to provide case data — fetch it yourself.
+
+---
+
+## Agent input method note
+
+The interview in Step 2 uses interactive prompts. In **GitHub Copilot CLI**, use the `ask_user` tool for each question — this gives a structured multiple-choice or freeform input. In **other MCP-compatible agents** (Claude Desktop, Cursor, etc.), ask the question in your response text and wait for the engineer's reply before proceeding. The workflow is the same either way.
 
 ---
 
@@ -46,7 +86,11 @@ If the checkit MCP is not available: note the bundle path in your response and r
 
 **This is the core of the workflow. You are acting as a quality gate — not a helper who collects answers. Your job is to ensure every item genuinely meets the standard, not just gets a response.**
 
-For every 🟡 or 🔴 item, ask the engineer directly using `ask_user`. One item at a time. When the answer comes back, assess it against the pass criteria below. If it doesn't meet the bar, **say so explicitly and ask again**. Do not move to the next item until the current one is satisfied.
+**If all 6 items are green:** skip straight to Step 3.
+
+**If any item is 🟡 or 🔴:** work through every gap one at a time. Do not stop, do not skip, do not offer to "come back to it". Each gap must be resolved before moving to the next. When all gaps are resolved, proceed to Step 3 and generate the form — no second tool call is needed.
+
+For every 🟡 or 🔴 item, ask the engineer directly. In Copilot CLI use `ask_user`; in other agents ask in your response text and wait for the reply. One item at a time. When the answer comes back, assess it against the pass criteria below. If it doesn't meet the bar, **say so explicitly and ask again**. Do not move to the next item until the current one is satisfied.
 
 **How to handle weak answers:**
 - Vague answer → "That's not specific enough. Engineering will need [X]. Can you give me the exact [version/log line/steps]?"
