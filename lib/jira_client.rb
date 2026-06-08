@@ -16,22 +16,33 @@ class JiraClient
       !JIRA_URL.nil?
   end
 
-  def self.search_duplicates(subject, product = nil)
-    new.search_duplicates(subject, product)
+  def self.search_duplicates(subject, product = nil, error_message = nil)
+    new.search_duplicates(subject, product, error_message)
   end
 
   # Returns:
   #   { available: false }                      — credentials absent
   #   { available: true, issues: [...], jql: }  — query ran
   #   { available: true, error: message }       — query failed
-  def search_duplicates(subject, product = nil)
+  def search_duplicates(subject, product = nil, error_message = nil)
     return { available: false } unless JiraClient.available?
 
     stop_words = %w[the a an and or in on at to of for with is are was were this that]
-    terms = subject.to_s.downcase
-                   .split(/\W+/)
-                   .reject { |w| stop_words.include?(w) || w.length < 4 }
-                   .first(4)
+
+    # Prefer error message text for search — more specific than subject
+    search_source = error_message.to_s.strip.empty? ? subject.to_s : error_message.to_s
+    terms = search_source.downcase
+                         .split(/\W+/)
+                         .reject { |w| stop_words.include?(w) || w.length < 4 }
+                         .first(4)
+
+    # Fall back to subject if error message yielded nothing useful
+    if terms.empty? && !error_message.to_s.strip.empty?
+      terms = subject.to_s.downcase
+                     .split(/\W+/)
+                     .reject { |w| stop_words.include?(w) || w.length < 4 }
+                     .first(4)
+    end
 
     return { available: true, issues: [], jql: nil } if terms.empty?
 

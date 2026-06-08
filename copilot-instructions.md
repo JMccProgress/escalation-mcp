@@ -50,6 +50,32 @@ Only after the tool returns should you present anything to the engineer. Never a
 
 ---
 
+## Score the Checklist Yourself
+
+**Before presenting anything to the engineer, read the case and score all 6 items.**
+
+The tool returns the raw case content — description, error message, and full comment history. You have everything you need. Apply the pass criteria below to each item and assign 🟢/🟡/🔴. Also identify: the product name, the product version, and the OS/environment from the content.
+
+**Do not pattern-match. Read and understand.**
+
+**Pass criteria:**
+
+1. **Environment & version** — 🟢 if exact product name + version AND OS/version are clearly stated. 🟡 if version is present but OS is missing or vague. 🔴 if version is absent or described as "latest"/"current".
+
+2. **Full logs** — 🟢 if a support bundle has been gathered and attached, or all relevant nodes are covered. 🟡 if logs are partial or only a snippet has been shared. 🔴 if no logs have been provided at all.
+
+3. **Initial RCA** — 🟢 if there is a specific hypothesis about root cause supported by evidence (log line, metric, behaviour). 🟡 if there is a general direction but no supporting evidence. 🔴 if the case only describes symptoms with no hypothesis.
+
+4. **Workarounds** — 🟢 if workarounds tried (and their outcomes) are documented, OR it is clearly stated why none were applicable. 🟡 if some troubleshooting is mentioned but outcomes aren't clear. 🔴 if nothing has been tried and no reason is given.
+
+5. **Steps to reproduce** — 🟢 if full numbered STR are present, OR a formal statement that reproduction is not feasible with a specific reason. 🟡 if there is a partial trigger or "it happens intermittently" without full steps. 🔴 if there is nothing.
+
+6. **AI-assisted analysis** — 🟢 if any AI tooling was used (checkit, Copilot, RAG KB search) and outcome noted. 🟡 if it is unclear. 🔴 if there is no mention at all.
+
+Once you have scored all 6, proceed to Step 1.
+
+---
+
 ## Agent input method note
 
 The interview in Step 2 uses interactive prompts. In **GitHub Copilot CLI**, use the `ask_user` tool for each question — this gives a structured multiple-choice or freeform input. In **other MCP-compatible agents** (Claude Desktop, Cursor, etc.), ask the question in your response text and wait for the engineer's reply before proceeding. The workflow is the same either way.
@@ -58,12 +84,13 @@ The interview in Step 2 uses interactive prompts. In **GitHub Copilot CLI**, use
 
 ## Step 1 — Present the Snapshot
 
-Before asking anything, present a clear visual summary so the engineer can see exactly where they stand. Show:
+Present a clear visual summary using **your own scores** from the checklist you just completed. Show:
 
 1. **Case header** — account, subject, severity, support tier, status, last update
-2. **Traffic-light checklist** — each of the 6 items with its 🟢/🟡/🔴 status and the one-line evidence/gap note. Format it as a compact list, not a wall of prose.
-3. **Overall verdict** — "X/6 green. We need to work through Y gaps before this is ready." Be direct: if 3 items are red, say "this case is not ready to escalate — three items need to be resolved first."
-4. **What happens next** — briefly tell the engineer: "I'm going to ask you about each gap one at a time. Once we've filled them all, I'll generate the complete SF escalation form."
+2. **Traffic-light checklist** — each of the 6 items with its 🟢/🟡/🔴 status and a one-line evidence/gap note based on what you actually read. Format it as a compact list, not a wall of prose.
+3. **Product & version** — state what product and version you identified from the case content.
+4. **Overall verdict** — "X/6 green. We need to work through Y gaps before this is ready." Be direct: if 3 items are red, say "this case is not ready to escalate — three items need to be resolved first."
+5. **What happens next** — briefly tell the engineer: "I'm going to ask you about each gap one at a time. Once we've filled them all, I'll generate the complete SF escalation form."
 
 Then stop. Let the engineer read and absorb the state before the interview begins.
 
